@@ -11,13 +11,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={
-    r"/api/*": {
-        "origins": ["https://spending-spotlight-three.vercel.app", "http://localhost:3000"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
-    }
-})
+
+# SIMPLIFIED CORS - Allow all origins for now
+CORS(app, origins="*", supports_credentials=True)
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -114,7 +110,7 @@ def home():
             "analyze": "/api/analyze (POST)"
         }
     })
-    
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze_pdf():
     """Analyze uploaded PDF and classify transactions"""
