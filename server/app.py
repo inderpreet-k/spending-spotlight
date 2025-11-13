@@ -44,7 +44,15 @@ def extract_transactions(pdf_path):
     month_abbr = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
     exclude_keywords = [
         "balance", "statement", "page", "account", "minimum", "summary",
-        "interest", "credit", "limit", "please", "visit", "payment due"
+        "interest", "credit", "limit", "please", "visit", "payment due",
+        "deposits", "withdrawals", "charges", "amount", "date",
+        # Address-related keywords
+        "apt", "suite", "unit", "road", "street", "st", "ave", "avenue",
+        "blvd", "boulevard", "dr", "drive", "ln", "lane", "way",
+        # Date-only lines
+        "through", "of october", "of november", "of december", "of january",
+        "of february", "of march", "of april", "of may", "of june",
+        "of july", "of august", "of september"
     ]
     
     lines = []
@@ -52,10 +60,28 @@ def extract_transactions(pdf_path):
         line = line.strip()
         if not line:
             continue
+        
+        # Skip if line contains excluded keywords
         if any(bad in line for bad in exclude_keywords):
             continue
-        # Look for date + amount pattern
-        if any(month in line for month in month_abbr) and re.search(r"\$?\d{1,4}(\.\d{2})?", line):
+        
+        # Must have a month abbreviation
+        has_month = any(month in line for month in month_abbr)
+        if not has_month:
+            continue
+        
+        # Must have a dollar amount pattern
+        has_amount = re.search(r"\$\d{1,4}(\.\d{2})?", line)
+        if not has_amount:
+            continue
+        
+        # Must have some merchant/description text (not just dates)
+        # Skip lines that are mostly just dates and numbers
+        words = line.split()
+        non_date_words = [w for w in words if not re.match(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d+|,|\$)', w)]
+        
+        # Need at least 2 real words (merchant name usually has multiple words)
+        if len(non_date_words) >= 2:
             lines.append(line)
     
     return lines
