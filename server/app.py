@@ -103,6 +103,18 @@ def health_check():
     """Health check endpoint"""
     return jsonify({"status": "Server is running!", "version": "1.0.0"})
 
+@app.route('/', methods=['GET'])
+def home():
+    """Root endpoint"""
+    return jsonify({
+        "message": "Spending Spotlight API",
+        "status": "running",
+        "endpoints": {
+            "health": "/api/health",
+            "analyze": "/api/analyze (POST)"
+        }
+    })
+    
 @app.route('/api/analyze', methods=['POST'])
 def analyze_pdf():
     """Analyze uploaded PDF and classify transactions"""
