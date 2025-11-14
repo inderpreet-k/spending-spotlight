@@ -2,17 +2,17 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import pdfplumber
-import re
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
+import json
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
-# SIMPLIFIED CORS - Allow all origins for now
+# CORS Configuration
 CORS(app, origins="*", supports_credentials=True)
 
 # Configuration
@@ -30,86 +30,90 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def extract_transactions(pdf_path):
-    """Extract transaction lines from PDF"""
+def extract_text_from_pdf(pdf_path):
+    """Extract all text from PDF"""
     text = ""
-    
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
             if page_text:
                 text += page_text + "\n"
+    return text
+
+def extract_transactions_with_ai(pdf_text):
+    """Use AI to extract transactions from PDF text"""
     
-    text = text.lower()
-    month_abbr = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-    exclude_keywords = [
-        "balance", "statement", "page", "account", "minimum", "summary",
-        "interest", "credit", "limit", "please", "visit", "payment due",
-        "deposits", "withdrawals", "charges", "amount", "date",
-        # Address-related keywords
-        "apt", "suite", "unit", "road", "street", "st", "ave", "avenue",
-        "blvd", "boulevard", "dr", "drive", "ln", "lane", "way",
-        # Date-only lines
-        "through", "of october", "of november", "of december", "of january",
-        "of february", "of march", "of april", "of may", "of june",
-        "of july", "of august", "of september"
-    ]
-    
-    lines = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        
-        # Skip if line contains excluded keywords
-        if any(bad in line for bad in exclude_keywords):
-            continue
-        
-        # Must have a month abbreviation
-        has_month = any(month in line for month in month_abbr)
-        if not has_month:
-            continue
-        
-        # Must have a dollar amount pattern
-        has_amount = re.search(r"\$\d{1,4}(\.\d{2})?", line)
-        if not has_amount:
-            continue
-        
-        # Must have some merchant/description text (not just dates)
-        # Skip lines that are mostly just dates and numbers
-        words = line.split()
-        non_date_words = [w for w in words if not re.match(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d+|,|\$)', w)]
-        
-        # Need at least 2 real words (merchant name usually has multiple words)
-        if len(non_date_words) >= 2:
-            lines.append(line)
-    
-    return lines
+    prompt = f"""You are analyzing a bank or credit card statement. Extract ONLY the actual transaction lines.
 
-def classify_with_gpt(line, expected_categories):
-    """Classify transaction using GPT"""
-    prompt = f"""You are classifying credit card transactions as either 'Expected' or 'Unexpected'.
+Rules:
+1. Extract lines that represent actual purchases, payments, or charges
+2. EXCLUDE: headers, footers, account summaries, balances, addresses, date ranges, subtotals, interest charges summaries, page numbers
+3. Each transaction should have: a date, merchant/description, and amount
+4. Include the FULL transaction line exactly as it appears
+5. If you see patterns like "LONDON DRUGS", "NETFLIX", "CHEVRON", "AMAZON", etc. - these are transactions
+6. Skip lines like "Beginning Balance", "Ending Balance", "Total Credits", "Statement Period", addresses, etc.
 
-The user expects spending in these categories: {', '.join(expected_categories)}.
+Here is the statement text:
 
-Map merchants to categories smartly, for example:
-- 'London Drugs' → medical
-- 'Thrifty Foods' → groceries
-- 'Netflix' → media
-- 'Chevron', 'Esso' → gas
-- 'Amazon', 'Amzn Mktp' → online shopping
-- 'Concord Parking', 'Airport Parking' → travel
-- Restaurants → dining or food
+{pdf_text[:4000]}
 
-Classify this transaction: "{line}"
+Return ONLY a JSON array of transaction strings. Example format:
+["sep 9 sep 10 london drugs 17 delta bc 27.63", "sep 10 sep 11 rogers ******8621 888-764-3771 on 185.98"]
 
-Reply ONLY with: Expected or Unexpected."""
+If the text is longer, focus on the transaction section. Return only valid JSON, no markdown or explanation."""
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a financial assistant that classifies transactions."},
+                {"role": "system", "content": "You are a financial document analyzer. Extract only transaction lines from bank statements. Return valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0,
+            max_tokens=2000
+        )
+        
+        result = response.choices[0].message.content.strip()
+        
+        # Remove markdown code blocks if present
+        if result.startswith("```json"):
+            result = result.replace("```json", "").replace("```", "").strip()
+        elif result.startswith("```"):
+            result = result.replace("```", "").strip()
+        
+        transactions = json.loads(result)
+        return transactions if isinstance(transactions, list) else []
+        
+    except Exception as e:
+        print(f"Error extracting transactions with AI: {e}")
+        return []
+
+def classify_with_gpt(transaction, expected_categories):
+    """Classify transaction using GPT"""
+    prompt = f"""You are classifying credit card/bank transactions as either 'Expected' or 'Unexpected'.
+
+The user expects spending in these categories: {', '.join(expected_categories)}.
+
+Map merchants intelligently:
+- Grocery stores (Thrifty Foods, Safeway, Walmart grocery, etc.) → groceries
+- Gas stations (Chevron, Esso, Shell, etc.) → gas
+- Restaurants, cafes, food delivery → dining or food
+- Streaming services (Netflix, Spotify, etc.) → media
+- Phone/internet bills (Rogers, Telus, etc.) → bills
+- Pharmacies (London Drugs, CVS, Walgreens) → medical
+- Amazon, online retailers → online shopping
+- Parking, airports, hotels → travel
+- One-time government fees (passport, immigration) → if user selected those custom categories
+
+Transaction: "{transaction}"
+
+Reply with ONLY one word: Expected or Unexpected"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a financial assistant. Classify transactions accurately."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0,
@@ -117,13 +121,8 @@ Reply ONLY with: Expected or Unexpected."""
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Error classifying transaction: {e}")
-        return "Unexpected"  # Default to unexpected if error
-
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({"status": "Server is running!", "version": "1.0.0"})
+        print(f"Error classifying: {e}")
+        return "Unexpected"
 
 @app.route('/', methods=['GET'])
 def home():
@@ -136,6 +135,11 @@ def home():
             "analyze": "/api/analyze (POST)"
         }
     })
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"status": "Server is running!", "version": "2.0.0"})
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_pdf():
@@ -155,7 +159,6 @@ def analyze_pdf():
         
         # Get selected categories
         categories = request.form.get('categories', '[]')
-        import json
         categories = json.loads(categories)
         
         if len(categories) == 0:
@@ -167,14 +170,21 @@ def analyze_pdf():
         file.save(filepath)
         
         try:
-            # Extract transactions
-            transactions = extract_transactions(filepath)
+            # Extract text from PDF
+            pdf_text = extract_text_from_pdf(filepath)
+            
+            if not pdf_text or len(pdf_text) < 50:
+                os.remove(filepath)
+                return jsonify({"error": "Could not extract text from PDF"}), 400
+            
+            # Use AI to extract transactions
+            transactions = extract_transactions_with_ai(pdf_text)
             
             if len(transactions) == 0:
                 os.remove(filepath)
                 return jsonify({"error": "No transactions found in PDF"}), 400
             
-            # Classify transactions
+            # Classify transactions with GPT
             expected = []
             unexpected = []
             
