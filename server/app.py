@@ -105,7 +105,8 @@ Reply in JSON format:
     # Step 3: Process in manageable chunks
     max_chars = 12000  # Increased chunk size for efficiency
     all_transactions = []
-    
+    last_openai_error = None
+
     text_chunks = [relevant_text[i:i+max_chars] for i in range(0, len(relevant_text), max_chars)]
     
     # Limit to reasonable number of chunks (prevents excessive API calls for massive docs)
@@ -166,7 +167,11 @@ JSON only, no markdown."""
             
         except Exception as e:
             print(f"Error in chunk {idx + 1}: {e}")
+            last_openai_error = e
             continue
+    # If every chunk failed and we got nothing, surface the real error
+    if not all_transactions and last_openai_error is not None:
+        raise RuntimeError(f"OpenAI API failed on all chunks: {last_openai_error}")
     
     # Remove duplicates and empty strings
     unique_transactions = list(set([t.strip() for t in all_transactions if t.strip()]))
@@ -234,6 +239,10 @@ def health_check():
 def analyze_pdf():
     """Analyze uploaded PDF and classify transactions"""
     try:
+        # Check API key before doing any work
+        if not os.getenv('OPENAI_API_KEY'):
+            return jsonify({"error": "Server misconfiguration: OPENAI_API_KEY is not set"}), 500
+        
         # Check if file was uploaded
         if 'pdf' not in request.files:
             return jsonify({"error": "No PDF file uploaded"}), 400
