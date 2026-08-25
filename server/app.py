@@ -18,7 +18,7 @@ app = Flask(__name__)
 CORS(app, origins="*", supports_credentials=True)
 
 from sentinel import Sentinel
-sentinel = Sentinel('https://sentinel-ai-3xkl.onrender.com', 'sk-AuihW6HuqS8QvOs3xxcZagEioeJHWrr4y5GduM4l5OI')
+sentinel = Sentinel('https://sentinel-ai-3xkl.onrender.com', 'sk-MJt2A1pl2t5YXgglqAbVqlBVjBcItBk-pLHFeZSQt6M')
 
 @app.before_request
 def protect():
