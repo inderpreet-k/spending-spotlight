@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -6,6 +7,7 @@ import os
 from openai import OpenAI
 from dotenv import load_dotenv
 import json
+from sentinel import Sentinel
 
 # Load environment variables
 load_dotenv()
@@ -15,6 +17,14 @@ app = Flask(__name__)
 # CORS Configuration
 CORS(app, origins="*", supports_credentials=True)
 
+from sentinel import Sentinel
+sentinel = Sentinel('https://sentinel-ai-3xkl.onrender.com', 'sk-AuihW6HuqS8QvOs3xxcZagEioeJHWrr4y5GduM4l5OI')
+
+@app.before_request
+def protect():
+    result = sentinel.check_flask_request(request)
+    if result['decision'] == 'block':
+        return jsonify({'error': 'Blocked', 'reason': result.get('reason')}), 403
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'pdf'}
